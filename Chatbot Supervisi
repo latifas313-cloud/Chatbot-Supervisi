@@ -1,0 +1,125 @@
+/**
+ * CHATBOT SUPERVISI GURU DENGAN GEMINI API (Code.gs)
+ */
+
+// Menampilkan halaman Web App
+function doGet(e) {
+  var template = HtmlService.createHtmlOutputFromFile('index')
+    .setTitle('Chatbot Supervisi & Penilaian Guru')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1.0');
+  return template;
+}
+
+/**
+ * Memproses pesan pengguna via Gemini API dan mencatatnya ke Google Sheets.
+ */
+function processChatMessage(role, userName, userMessage) {
+  try {
+    // 1. Ambil respon cerdas dari Gemini
+    var responseText = callGeminiAI(role, userName, userMessage);
+    
+    // 2. Simpan interaksi ke Google Sheets
+    saveLogToSheet(role, userName, userMessage, responseText);
+    
+    return {
+      status: 'success',
+      reply: responseText
+    };
+  } catch (error) {
+    return {
+      status: 'error',
+      message: 'Kendala sistem: ' + error.toString()
+    };
+  }
+}
+
+/**
+ * Menghubungkan ke Gemini API menggunakan UrlFetchApp.
+ */
+function callGeminiAI(role, userName, message) {
+  // Ambil API Key dari Script Properties
+  var apiKey = PropertiesService.getScriptProperties().getProperty('GEMINI_API_KEY');
+  
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY belum dikonfigurasi di Script Properties.");
+  }
+
+  // Model Gemini 2.5 Flash
+  var url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=" + apiKey;
+
+  // System instruction kontekstual berdasarkan peran pengguna
+  var systemPrompt = "Anda adalah Asisten Virtual Ahli Supervisi Akademik dan Penilaian Kinerja Guru di Indonesia. " +
+    "Lawan bicara Anda bernama " + userName + " dengan peran sebagai " + role + ".\n\n" +
+    "PEDOMAN MENJAWAB:\n" +
+    "1. Jika peran 'Guru': Berikan panduan mendalam, profesional, dan solutif seputar perencanaan pembelajaran (Kurikulum Merdeka/K13, Modul Ajar, ATP, CP), pelaksanaan observasi kelas, instrumen rubrik penilaian kinerja, refleksi diri, serta tindak lanjut pembinaan (Kombel, PMM).\n" +
+    "2. Jika peran 'Siswa': Berikan penjelasan dengan bahasa yang ramah, jelas, mudah dipahami siswa, dan menenangkan. Jelaskan bahwa evaluasi atau umpan balik untuk guru bersifat objektif, rahasia, tidak mempengaruhi nilai akademik siswa, serta bertujuan memperbaiki cara mengajar di kelas.\n" +
+    "3. Jawab langsung ke inti persoalan secara terstruktur, edukatif, dan santun. Hindari jawaban yang bertele-tele.";
+
+  var payload = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: message }
+        ]
+      }
+    ],
+    systemInstruction: {
+      parts: [
+        { text: systemPrompt }
+      ]
+    },
+    generationConfig: {
+      temperature: 0.7,
+      maxOutputTokens: 800
+    }
+  };
+
+  var options = {
+    method: "post",
+    contentType: "application/json",
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  };
+
+  var response = UrlFetchApp.fetch(url, options);
+  var responseCode = response.getResponseCode();
+  var json = JSON.parse(response.getContentText());
+
+  if (responseCode !== 200) {
+    var errMsg = json.error ? json.error.message : response.getContentText();
+    throw new Error("Gemini API Error (" + responseCode + "): " + errMsg);
+  }
+
+  if (json.candidates && json.candidates[0].content && json.candidates[0].content.parts.length > 0) {
+    return json.candidates[0].content.parts[0].text;
+  }
+
+  return "Maaf, asisten tidak dapat memproses jawaban saat ini. Silakan ulangi pertanyaan Anda.";
+}
+
+/**
+ * Menyimpan riwayat percakapan ke sheet aktif.
+ */
+function saveLogToSheet(role, userName, message, reply) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheetName = "Riwayat_Chatbot";
+  var sheet = ss.getSheetByName(sheetName);
+  
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    var headers = ["Timestamp", "Role", "Nama Pengguna", "Pertanyaan", "Jawaban Gemini"];
+    sheet.appendRow(headers);
+    sheet.getRange(1, 1, 1, headers.length).setFontWeight("bold").setBackground("#E2E8F0");
+    sheet.setFrozenRows(1);
+  }
+  
+  sheet.appendRow([
+    new Date(),
+    role,
+    userName,
+    message,
+    reply
+  ]);
+}
